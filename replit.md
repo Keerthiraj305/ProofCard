@@ -28,7 +28,7 @@ ProofCard turns a student's real project into an evidence-grounded case study an
 
 ## Architecture decisions
 
-- Keep the first version frontend-only; drafts are stored in the browser and shared as encoded data in the URL hash.
+- Keep the first version frontend-only; multiple drafts are stored as local project cards in the browser and shared as encoded data in the URL hash.
 - Generated writing must only reorganize user-entered facts. Never invent metrics, achievements, or verification.
 - No account, AI API key, or backend is required for the core workflow.
 
@@ -37,6 +37,8 @@ ProofCard turns a student's real project into an evidence-grounded case study an
 - Guided fields capture a project's problem, personal contribution, tools and AI use, process, validation, impact, limitations, and skills.
 - Produces an editable Showcase-ready description and case-study preview.
 - Supports demo content, local draft saving, copy/share actions, and a privacy reminder.
+- Uses colorful paper flashcards as a project shelf, with duplicate and archive actions.
+- Includes a Handshake submission checklist and evidence review based only on user-entered facts.
 
 ## User preferences
 

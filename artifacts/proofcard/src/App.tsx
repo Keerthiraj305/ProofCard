@@ -12,6 +12,7 @@ import {
   ExternalLink,
   FileText,
   Fingerprint,
+  FolderPlus,
   Link2,
   LockKeyhole,
   Plus,
@@ -19,6 +20,7 @@ import {
   Save,
   ShieldCheck,
   Sparkles,
+  Stamp,
   Trash2,
   TriangleAlert,
   X,
@@ -42,7 +44,14 @@ type ProjectDraft = {
   descriptionOverride: string;
 };
 
+type SavedProject = {
+  id: string;
+  draft: ProjectDraft;
+  updatedAt: number;
+};
+
 const STORAGE_KEY = 'proofcard-project-draft-v1';
+const PROJECTS_KEY = 'proofcard-projects-v1';
 
 const emptyDraft: ProjectDraft = {
   title: '',
@@ -120,9 +129,32 @@ function normalizeDraft(value: unknown): ProjectDraft {
 
 function hasSavedDraft() {
   try {
-    return Boolean(localStorage.getItem(STORAGE_KEY));
+    return Boolean(localStorage.getItem(PROJECTS_KEY) || localStorage.getItem(STORAGE_KEY));
   } catch {
     return false;
+  }
+}
+
+function createProject(draft: ProjectDraft = emptyDraft): SavedProject {
+  return { id: `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`, draft: normalizeDraft(draft), updatedAt: Date.now() };
+}
+
+function loadProjects(): SavedProject[] {
+  try {
+    const stored = localStorage.getItem(PROJECTS_KEY);
+    if (stored) {
+      const parsed = JSON.parse(stored);
+      if (Array.isArray(parsed)) {
+        return parsed
+          .filter((project): project is Partial<SavedProject> => Boolean(project && typeof project === 'object'))
+          .map((project) => createProject(normalizeDraft(project.draft)))
+          .map((project, index) => ({ ...project, id: typeof parsed[index]?.id === 'string' ? parsed[index].id : project.id, updatedAt: typeof parsed[index]?.updatedAt === 'number' ? parsed[index].updatedAt : project.updatedAt }));
+      }
+    }
+    const legacy = localStorage.getItem(STORAGE_KEY);
+    return legacy ? [createProject(JSON.parse(legacy))] : [];
+  } catch {
+    return [];
   }
 }
 
@@ -150,6 +182,8 @@ function loadInitialDraft(): ProjectDraft {
     if (match?.[1]) {
       return normalizeDraft(JSON.parse(decodeURIComponent(match[1])));
     }
+    const projects = loadProjects();
+    if (projects[0]) return projects[0].draft;
     const saved = localStorage.getItem(STORAGE_KEY);
     if (saved) return normalizeDraft(JSON.parse(saved));
   } catch {
@@ -160,6 +194,8 @@ function loadInitialDraft(): ProjectDraft {
 
 function App() {
   const [draft, setDraft] = useState<ProjectDraft>(loadInitialDraft);
+  const [projects, setProjects] = useState<SavedProject[]>(loadProjects);
+  const [activeProjectId, setActiveProjectId] = useState<string | null>(() => loadProjects()[0]?.id ?? null);
   const [saved, setSaved] = useState(() => !window.location.hash && hasSavedDraft());
   const [toast, setToast] = useState('');
   const [skillInput, setSkillInput] = useState('');
@@ -169,9 +205,17 @@ function App() {
 
   const generatedDescription = useMemo(() => makeDescription(draft), [draft]);
   const description = draft.descriptionOverride || generatedDescription;
-  const fieldsToComplete = [draft.title, draft.summary, draft.problem, draft.contribution, draft.tools, draft.process, draft.validation, draft.impact, draft.limitations, draft.skills.length ? 'yes' : ''];
+  const fieldsToComplete = [draft.title, draft.summary, draft.problem, draft.contribution, draft.process, draft.validation, draft.impact, draft.limitations];
   const completedCount = fieldsToComplete.filter((item) => String(item).trim().length > 0).length;
   const progress = Math.round((completedCount / fieldsToComplete.length) * 100);
+  const evidenceReview = [
+    { label: 'Project has a title', complete: Boolean(clean(draft.title)) },
+    { label: 'Your personal contribution is clear', complete: Boolean(clean(draft.contribution)) },
+    { label: 'At least one check or review is described', complete: Boolean(clean(draft.validation)) },
+    { label: 'A project or evidence link is included', complete: Boolean(safeHttpUrl(draft.projectUrl) || draft.evidenceLinks.some((link) => safeHttpUrl(link.url))) },
+    { label: 'Limitations or next steps are honest', complete: Boolean(clean(draft.limitations)) },
+  ];
+  const completedReviews = evidenceReview.filter((item) => item.complete).length;
 
   useEffect(() => {
     if (!toast) return;
@@ -208,12 +252,64 @@ function App() {
   const saveDraft = () => {
     try {
       localStorage.setItem(STORAGE_KEY, JSON.stringify(draft));
+      const project = activeProjectId ? projects.find((item) => item.id === activeProjectId) : undefined;
+      const nextProject = project
+        ? { ...project, draft, updatedAt: Date.now() }
+        : createProject(draft);
+      const nextProjects = project ? projects.map((item) => item.id === nextProject.id ? nextProject : item) : [nextProject, ...projects];
+      localStorage.setItem(PROJECTS_KEY, JSON.stringify(nextProjects));
+      setProjects(nextProjects);
+      setActiveProjectId(nextProject.id);
       setSaved(true);
       setDemoLoaded(false);
       setToast('Draft saved on this device.');
     } catch {
       setToast('Could not save here. Your browser storage may be full.');
     }
+  };
+
+  const startNewProject = () => {
+    const nextProject = createProject();
+    setProjects((current) => [nextProject, ...current]);
+    setActiveProjectId(nextProject.id);
+    setDraft(emptyDraft);
+    setSaved(false);
+    setDemoLoaded(false);
+    setToast('Fresh project card created.');
+    window.scrollTo({ top: 0, behavior: 'smooth' });
+  };
+
+  const switchProject = (project: SavedProject) => {
+    setActiveProjectId(project.id);
+    setDraft(project.draft);
+    setSaved(true);
+    setDemoLoaded(false);
+    setToast(`Opened ${project.draft.title || 'untitled project'}.`);
+    window.scrollTo({ top: 0, behavior: 'smooth' });
+  };
+
+  const duplicateProject = (project: SavedProject) => {
+    const copy = createProject({ ...project.draft, title: project.draft.title ? `${project.draft.title} copy` : '' });
+    const nextProjects = [copy, ...projects];
+    setProjects(nextProjects);
+    setActiveProjectId(copy.id);
+    setDraft(copy.draft);
+    try { localStorage.setItem(PROJECTS_KEY, JSON.stringify(nextProjects)); } catch { setToast('Could not duplicate this project.'); return; }
+    setSaved(true);
+    setToast('Project card duplicated.');
+  };
+
+  const removeProject = (project: SavedProject) => {
+    if (!window.confirm(`Archive "${project.draft.title || 'untitled project'}"?`)) return;
+    const nextProjects = projects.filter((item) => item.id !== project.id);
+    setProjects(nextProjects);
+    try { localStorage.setItem(PROJECTS_KEY, JSON.stringify(nextProjects)); } catch { setToast('Could not update your project shelf.'); return; }
+    if (activeProjectId === project.id) {
+      const next = nextProjects[0];
+      if (next) switchProject(next);
+      else startNewProject();
+    }
+    setToast('Project card archived.');
   };
 
   const clearDraft = () => {
@@ -313,8 +409,9 @@ function App() {
         <div className="side-project">
           <div className="side-project-kicker"><span className="live-dot" /> CURRENT PROJECT</div>
           <div className="side-project-title" data-testid="text-sidebar-project-title">{draft.title || 'Untitled project'}</div>
-          <div className="side-project-meta" data-testid="text-sidebar-progress">{completedCount} of 10 details added</div>
+          <div className="side-project-meta" data-testid="text-sidebar-progress">{completedCount} of {fieldsToComplete.length} details added</div>
         </div>
+        <button className="sidebar-new" type="button" onClick={startNewProject}><FolderPlus size={14} /> New project card</button>
         <div className="nav-label">Build your case study</div>
         <nav className="nav-list">
           {fieldSections.map((section) => (
@@ -350,6 +447,30 @@ function App() {
         </header>
 
         <div className="content-wrap">
+          <section className="project-shelf" aria-label="Project cards">
+            <div className="shelf-heading">
+              <div><div className="eyebrow"><span className="eyebrow-line" /> YOUR PROJECT SHELF</div><h2>Keep every story in reach.</h2></div>
+              <button className="btn btn-primary" type="button" onClick={startNewProject}><FolderPlus size={14} /> New card</button>
+            </div>
+            <div className="flashcard-grid">
+              {projects.slice(0, 4).map((project, index) => (
+                <article className={`flashcard flashcard-${index % 4} ${activeProjectId === project.id ? 'selected' : ''}`} key={project.id}>
+                  <button className="flashcard-main" type="button" onClick={() => switchProject(project)}>
+                    <span className="flashcard-tab">{activeProjectId === project.id ? 'OPEN' : `CARD 0${index + 1}`}</span>
+                    <strong>{project.draft.title || 'Untitled project'}</strong>
+                    <span>{project.draft.summary || 'A blank card waiting for your next idea.'}</span>
+                    <small>{project.draft.skills.slice(0, 2).join(' · ') || 'Start with the story'}</small>
+                  </button>
+                  <div className="flashcard-actions">
+                    <button type="button" aria-label="Duplicate project card" onClick={() => duplicateProject(project)}><Copy size={13} /></button>
+                    <button type="button" aria-label="Archive project card" onClick={() => removeProject(project)}><Trash2 size={13} /></button>
+                  </div>
+                </article>
+              ))}
+              <button className="flashcard new-card" type="button" onClick={startNewProject}><Plus size={22} /><span>Add another project</span><small>Build a new evidence card</small></button>
+            </div>
+          </section>
+
           <div className="intro">
             <div>
               <div className="eyebrow"><span className="eyebrow-line" /> THE PROJECT EVIDENCE BUILDER</div>
@@ -527,6 +648,26 @@ function App() {
                   <button className="btn btn-primary" type="button" onClick={createShareLink} data-testid="button-create-share-link"><Link2 size={14} /> Create share link <ArrowUpRight size={13} /></button>
                 </div>
                 <div className="below-note"><LockKeyhole size={13} /> Saving stays on this device. Share links contain the draft in their URL.</div>
+              </section>
+              <section className="review-grid">
+                <div className="review-card">
+                  <div className="review-card-heading"><Stamp size={16} /><h3>Submission checklist</h3></div>
+                  <p>One last tidy-up before you paste this into Handshake.</p>
+                  {[
+                    ['Title and summary feel specific', Boolean(clean(draft.title) && clean(draft.summary))],
+                    ['Project link opens correctly', Boolean(projectHref)],
+                    ['Description has your role', Boolean(clean(draft.contribution))],
+                    ['Preview image is ready', false],
+                    ['Profile / Showcase choice is confirmed', false],
+                  ].map(([label, complete]) => <div className="check-row" key={String(label)}><span className={`check-box ${complete ? 'done' : ''}`}>{complete ? <Check size={11} /> : null}</span><span>{label}</span></div>)}
+                  <div className="review-foot">{evidenceReview.filter((item) => item.complete).length}/5 evidence checks passed</div>
+                </div>
+                <div className="review-card">
+                  <div className="review-card-heading"><ShieldCheck size={16} /><h3>Evidence review</h3></div>
+                  <p>ProofCard never verifies claims for you. It helps you notice what still needs a receipt.</p>
+                  <div className="evidence-score"><strong>{completedReviews}</strong><span>of {evidenceReview.length} checks passed</span></div>
+                  {evidenceReview.map((item) => <div className="check-row" key={item.label}><span className={`check-box ${item.complete ? 'done' : ''}`}>{item.complete ? <Check size={11} /> : null}</span><span>{item.label}</span></div>)}
+                </div>
               </section>
             </aside>
           </div>
