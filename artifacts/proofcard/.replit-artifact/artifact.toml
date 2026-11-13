@@ -1,0 +1,28 @@
+kind = "web"
+previewPath = "/"
+title = "ProofCard"
+description = "A student project evidence builder that turns a real AI or coursework project into an editable, shareable case study and Handshake AI Showcase-ready description."
+version = "1.0.0"
+id = "artifacts/proofcard"
+router = "path"
+
+[[services]]
+name = "web"
+paths = [ "/" ]
+localPort = 19437
+
+[services.development]
+run = "pnpm --filter @workspace/proofcard run dev"
+
+[services.production]
+build = [ "pnpm", "--filter", "@workspace/proofcard", "run", "build" ]
+serve = "static"
+publicDir = "artifacts/proofcard/dist/public"
+
+[[services.production.rewrites]]
+from = "/*"
+to = "/index.html"
+
+[services.env]
+PORT = "19437"
+BASE_PATH = "/"
